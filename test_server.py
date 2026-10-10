@@ -311,7 +311,7 @@ def test_list_items_filter_prefix_and_header():
         )
     finally:
         s._graph_get = orig
-    assert 'Project%20Portfolio' in seen['url'], seen['url']
+    assert 'Projects' in seen['url'], seen['url']
     assert "$filter=fields/status%20eq%20'In%20Progress'" in seen['url'], seen['url']
     assert seen['headers'] == {'Prefer': 'HonorNonIndexedQueriesWarningMayFailRandomly'}, seen['headers']
 
@@ -382,7 +382,7 @@ def test_list_item_update_patches_only_given_fields():
     assert seen['method'] == 'PATCH', seen
     assert seen['body'] == {'Title': 'new'}, seen
     assert '/items/3/fields' in seen['url'], seen
-    assert 'Project%20Portfolio' in seen['url'], seen
+    assert 'Projects' in seen['url'], seen
     assert r == {'id': '3', 'updated': ['Title']}, r
 
 

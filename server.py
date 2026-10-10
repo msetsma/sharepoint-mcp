@@ -470,7 +470,7 @@ def sp_read(path: str, max_chars: int = 20000) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 #
 # Unlike the file tools above, these talk to Graph. We borrow the Azure CLI's
-# signed-in session (`az account get-access-token`), which in this tenant
+# signed-in session (`az account get-access-token`), which in many tenants
 # carries effective SharePoint read access without an app registration. The
 # only new runtime dependency is the `az` CLI on PATH; if it is missing or
 # signed out, each tool returns an {'error': ...} dict rather than raising.
