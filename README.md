@@ -27,7 +27,7 @@ set to a truthy value (`1`, `true`, `yes`, `on`). Without it, the three write
 tools are not registered and the server is read-only.
 
 ```sh
-SHAREPOINT_ENABLE_WRITES=1 uv run --directory ~/.dotfiles-agents/mcp/sharepoint-mcp server.py
+SHAREPOINT_ENABLE_WRITES=1 uv run --directory /path/to/sharepoint-mcp server.py
 ```
 
 | Tool | What it does |
@@ -43,8 +43,14 @@ These wire out with `read_only_hint=False`; delete also sets
 ## Run
 
 ```sh
-uv run --directory ~/.dotfiles-agents/mcp/sharepoint-mcp server.py
-uv run --directory ~/.dotfiles-agents/mcp/sharepoint-mcp test_server.py  # offline self-check
+git clone https://github.com/msetsma/sharepoint-mcp
+uv run --directory /path/to/sharepoint-mcp server.py
+uv run --directory /path/to/sharepoint-mcp test_server.py  # offline self-check
 ```
+
+Register it with an MCP client as a stdio server with that `uv run` command
+(use an absolute path to `uv` for GUI apps). ~/.dotfiles-agents consumes it via
+its catalog (`catalog/mcp/sharepoint-mcp.toml`, `[package] manager = "git"`,
+cloned to `~/.dotfiles-agents/vendor/sharepoint-mcp`).
 
 Requires at least one synced SharePoint library.
