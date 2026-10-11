@@ -29,8 +29,14 @@ run `az login` once before using them (no app registration needed).
 > registers three tools that change SharePoint list data, including delete.
 > Without it, the write tools are not registered and the server is read-only.
 
-```sh
-SHAREPOINT_ENABLE_WRITES=1 uv run server.py
+Set it in the `env` of the server's client config (see [Run](#run)):
+
+```json
+{
+  "command": "/absolute/path/to/uv",
+  "args": ["run", "--directory", "/absolute/path/to/sharepoint-mcp", "server.py"],
+  "env": { "SHAREPOINT_ENABLE_WRITES": "1" }
+}
 ```
 
 | Tool | What it does |
@@ -62,9 +68,9 @@ Register it with an MCP client as a stdio server:
 
 ```json
 {
-  "command": "/opt/homebrew/bin/uv",
+  "command": "/absolute/path/to/uv",
   "args": ["run", "--directory", "/absolute/path/to/sharepoint-mcp", "server.py"]
 }
 ```
 
-Use an absolute path to `uv` in GUI apps; they don't inherit your shell `PATH`.
+Use an absolute path to `uv` in GUI apps (find it with `which uv`); they don't inherit your shell `PATH`.
