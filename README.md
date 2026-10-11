@@ -1,5 +1,7 @@
 # sharepoint-mcp
 
+[![CI](https://github.com/msetsma/sharepoint-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/msetsma/sharepoint-mcp/actions/workflows/ci.yml)
+
 Read-only-by-default MCP server for SharePoint on macOS: OneDrive-synced
 SharePoint libraries read from disk, and SharePoint lists via Microsoft Graph.
 The file tools need no Microsoft Graph consent and no Full Disk Access; the list
