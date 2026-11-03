@@ -6,8 +6,8 @@ Read-only-by-default MCP server for SharePoint on macOS: OneDrive-synced
 SharePoint libraries read from disk, and SharePoint lists via Microsoft Graph.
 The file tools need no Microsoft Graph consent and no Full Disk Access; the list
 tools (`sp_lists`, `sp_list_items`) use the Azure CLI's delegated Graph token
-instead, so they require a signed-in `az`. List writes exist too, but are
-[opt-in](#writes-opt-in).
+instead, so they require a signed-in `az`. List edits exist too, but are
+[opt-in](#writes-opt-in-update-only).
 
 ## Tools
 
@@ -22,12 +22,15 @@ instead, so they require a signed-in `az`. List writes exist too, but are
 `sp_lists` and `sp_list_items` borrow the `az` CLI's delegated Graph token, so
 run `az login` once before using them (no app registration needed).
 
-## Writes (opt-in)
+## Writes (opt-in, update only)
 
 > [!WARNING]
 > Setting `SHAREPOINT_ENABLE_WRITES` to a truthy value (`1`, `true`, `yes`, `on`)
-> registers three tools that change SharePoint list data, including delete.
-> Without it, the write tools are not registered and the server is read-only.
+> registers one tool, `sp_list_item_update`, which changes existing SharePoint
+> list items. Without it, the server is read-only.
+
+There is no create or delete tool, by design. Agents can edit rows but never
+add or remove them.
 
 Set it in the `env` of the server's client config (see [Run](#run)):
 
@@ -41,13 +44,12 @@ Set it in the `env` of the server's client config (see [Run](#run)):
 
 | Tool | What it does |
 |---|---|
-| `sp_list_item_create` | Create an item from a `fields` dict |
-| `sp_list_item_update` | Change only the given fields on an item |
-| `sp_list_item_delete` | Delete an item (moves it to the site recycle bin) |
+| `sp_list_item_update` | Change only the given fields on an existing item; returns each field's value before and after |
 
-`fields` is a dict of column values, e.g. `{"status": "In Progress"}`.
-These register with `read_only_hint=False`; delete also sets
-`destructive_hint=True` so clients prompt.
+`fields` is a dict of column values, e.g. `{"status": "In Progress"}`. The tool
+registers with `read_only_hint=False` and `destructive_hint=True`, so clients
+prompt before each call. The `az` sign-in needs write access to the site, or
+Graph returns 403.
 
 ## Requirements
 

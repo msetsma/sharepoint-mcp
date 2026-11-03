@@ -247,8 +247,11 @@ def test_read_only_by_default():
     assert s.ENABLE_WRITES is False
     assert s.REGISTERED_WRITE_TOOLS == []
     # The write functions exist so they stay testable, but must not be registered.
-    for name in ('sp_list_item_create', 'sp_list_item_update', 'sp_list_item_delete'):
-        assert callable(getattr(s, name)), name
+    assert callable(s.sp_list_item_update)
+    # Create and delete must never exist, flag or not.
+    assert not hasattr(s, 'sp_list_item_create')
+    assert not hasattr(s, 'sp_list_item_delete')
+    assert [t.__name__ for t, _ in s.WRITE_TOOLS] == ['sp_list_item_update']
     forbidden = {'mail_send', 'mail_reply', 'event_create', 'sp_write', 'mail_move'}
     names = {a for a in dir(s) if callable(getattr(s, a)) and not a.startswith('_')}
     assert not (names & forbidden), names & forbidden
@@ -348,30 +351,15 @@ def test_az_bin_missing_raises_graph_error():
 # --- SharePoint list writes (opt-in) --------------------------------------
 
 
-def test_list_item_create_posts_fields():
-    seen = {}
-
-    def fake(url, method='GET', body=None, headers=None, timeout=60):
-        seen.update(url=url, method=method, body=body)
-        return {'id': '99', 'webUrl': 'https://x/99', 'fields': {'Title': 'T'}}
-
-    orig = s._graph_request
-    s._graph_request = fake
-    try:
-        r = s.sp_list_item_create('contoso.sharepoint.com,a,b', 'L', {'Title': 'T'})
-    finally:
-        s._graph_request = orig
-    assert seen['method'] == 'POST', seen
-    assert seen['body'] == {'fields': {'Title': 'T'}}, seen
-    assert r == {'id': '99', 'web_url': 'https://x/99'}, r
-
-
 def test_list_item_update_patches_only_given_fields():
     seen = {}
 
+    calls = []
+
     def fake(url, method='GET', body=None, headers=None, timeout=60):
+        calls.append(method)
         seen.update(url=url, method=method, body=body)
-        return {'Title': 'new'}
+        return {'Title': 'old'} if method == 'GET' else {'Title': 'new'}
 
     orig = s._graph_request
     s._graph_request = fake
@@ -383,29 +371,11 @@ def test_list_item_update_patches_only_given_fields():
     assert seen['body'] == {'Title': 'new'}, seen
     assert '/items/3/fields' in seen['url'], seen
     assert 'Projects' in seen['url'], seen
-    assert r == {'id': '3', 'updated': ['Title']}, r
-
-
-def test_list_item_delete_uses_delete():
-    seen = {}
-
-    def fake(url, method='GET', body=None, headers=None, timeout=60):
-        seen.update(url=url, method=method)
-        return {}
-
-    orig = s._graph_request
-    s._graph_request = fake
-    try:
-        r = s.sp_list_item_delete('contoso.sharepoint.com,a,b', 'L', '3')
-    finally:
-        s._graph_request = orig
-    assert seen['method'] == 'DELETE', seen
-    assert seen['url'].endswith('/items/3'), seen
-    assert r == {'deleted': True, 'item_id': '3'}, r
+    assert calls == ['GET', 'PATCH'], calls
+    assert r == {'id': '3', 'changes': {'Title': {'before': 'old', 'after': 'new'}}}, r
 
 
 def test_writes_reject_empty_fields():
-    assert 'error' in s.sp_list_item_create('contoso.sharepoint.com,a,b', 'L', {})
     assert 'error' in s.sp_list_item_update('contoso.sharepoint.com,a,b', 'L', '3', {})
 
 
@@ -416,9 +386,7 @@ def test_write_error_surfaces_as_dict():
     orig = s._graph_request
     s._graph_request = boom
     try:
-        assert s.sp_list_item_create('contoso.sharepoint.com,a,b', 'L', {'T': 1}) == {'error': 'nope'}
         assert s.sp_list_item_update('contoso.sharepoint.com,a,b', 'L', '3', {'T': 1}) == {'error': 'nope'}
-        assert s.sp_list_item_delete('contoso.sharepoint.com,a,b', 'L', '3') == {'error': 'nope'}
     finally:
         s._graph_request = orig
 

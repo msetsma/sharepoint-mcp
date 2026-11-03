@@ -42,9 +42,10 @@ mcp = MCPServer(
     instructions=(
         'Read-only access to SharePoint: OneDrive-synced SharePoint files and '
         'SharePoint lists (sp_lists/sp_list_items, via Graph -- needs a '
-        'signed-in `az` CLI). List writes (sp_list_item_create/update/delete) '
-        'exist only when SHAREPOINT_ENABLE_WRITES is set; they are destructive, '
-        'so confirm with the user before calling them. '
+        'signed-in `az` CLI). sp_list_item_update edits existing list items and '
+        'exists only when SHAREPOINT_ENABLE_WRITES is set; show the user the exact '
+        'item and field changes and get their approval before every call. There is '
+        'no create or delete tool by design. '
         'sp_find never downloads anything; sp_read downloads on demand.'
     ),
 )
@@ -53,12 +54,10 @@ mcp = MCPServer(
 # skip confirmation prompts and never treat a call as mutating.
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True)
 
-# Write tools are opt-in (SHAREPOINT_ENABLE_WRITES). When enabled they carry honest
-# hints so clients still prompt: create is non-destructive, update rewrites a
-# value, delete is destructive.
-WRITE_CREATE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False)
-WRITE_UPDATE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True)
-WRITE_DELETE = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True)
+# The one write tool (update) is opt-in (SHAREPOINT_ENABLE_WRITES) and carries
+# honest hints so clients still prompt. It overwrites values, so it is marked
+# destructive. Create and delete are deliberately not implemented.
+WRITE_UPDATE = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True)
 
 
 # --------------------------------------------------------------------------
@@ -655,26 +654,11 @@ def _list_items_url(site_id: str, list_name: str, suffix: str = '') -> str:
     return f'{GRAPH_ROOT}/sites/{site_id}/lists/{urllib.parse.quote(list_name)}/items{suffix}'
 
 
-def sp_list_item_create(site: str, list_name: str, fields: dict[str, Any]) -> dict[str, Any]:
-    """Create an item in a SharePoint list (available only with SHAREPOINT_ENABLE_WRITES).
-
-    Args:
-        site: Site URL or Graph site id.
-        list_name: List display name or id.
-        fields: Column values for the new item, e.g. {"Title": "New item"}.
-    """
-    if not fields:
-        return {'error': 'fields must not be empty'}
-    try:
-        sid = _resolve_site_id(site)
-        data = _graph_request(_list_items_url(sid, list_name), 'POST', {'fields': fields})
-    except GraphError as e:
-        return {'error': str(e)}
-    return {'id': data.get('id'), 'web_url': data.get('webUrl')}
-
-
 def sp_list_item_update(site: str, list_name: str, item_id: str, fields: dict[str, Any]) -> dict[str, Any]:
-    """Update fields on a list item; keys you omit are left untouched (opt-in).
+    """Update fields on an existing list item; keys you omit are left untouched (opt-in).
+
+    Confirm the exact item and field values with the user before calling.
+    Returns each changed field's value before and after, so every edit is traceable.
 
     Args:
         site: Site URL or Graph site id.
@@ -687,34 +671,19 @@ def sp_list_item_update(site: str, list_name: str, item_id: str, fields: dict[st
     try:
         sid = _resolve_site_id(site)
         url = _list_items_url(sid, list_name, f'/{urllib.parse.quote(str(item_id))}/fields')
-        _graph_request(url, 'PATCH', fields)
+        old = _graph_request(url)
+        new = _graph_request(url, 'PATCH', fields)
     except GraphError as e:
         return {'error': str(e)}
-    return {'id': str(item_id), 'updated': sorted(fields)}
+    return {
+        'id': str(item_id),
+        'changes': {k: {'before': old.get(k), 'after': new.get(k, fields[k])} for k in sorted(fields)},
+    }
 
 
-def sp_list_item_delete(site: str, list_name: str, item_id: str) -> dict[str, Any]:
-    """Delete a list item, sending it to the site recycle bin (opt-in, destructive).
-
-    Args:
-        site: Site URL or Graph site id.
-        list_name: List display name or id.
-        item_id: Item id, as returned by `sp_list_items`.
-    """
-    try:
-        sid = _resolve_site_id(site)
-        url = _list_items_url(sid, list_name, f'/{urllib.parse.quote(str(item_id))}')
-        _graph_request(url, 'DELETE')
-    except GraphError as e:
-        return {'error': str(e)}
-    return {'deleted': True, 'item_id': str(item_id)}
-
-
-WRITE_TOOLS = (
-    (sp_list_item_create, WRITE_CREATE),
-    (sp_list_item_update, WRITE_UPDATE),
-    (sp_list_item_delete, WRITE_DELETE),
-)
+# Only update is exposed. Create and delete are deliberately absent: agents
+# may edit existing rows, never add or remove them.
+WRITE_TOOLS = ((sp_list_item_update, WRITE_UPDATE),)
 
 REGISTERED_WRITE_TOOLS: list[str] = []
 if ENABLE_WRITES:
