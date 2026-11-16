@@ -96,7 +96,7 @@ Install and configure the sharepoint-mcp MCP server (https://github.com/msetsma/
    - Claude Code: `claude mcp add --scope user sharepoint-mcp -- <uv> run --directory <home>/sharepoint-mcp server.py`
    - Claude Desktop: add an entry under "mcpServers" in ~/Library/Application Support/Claude/claude_desktop_config.json with "command": "<uv>", "args": ["run", "--directory", "<home>/sharepoint-mcp", "server.py"], and "env": {"PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"}. Merge into the existing file; don't overwrite other servers. Back up the file first.
    Use real absolute paths, not ~.
-8. Do NOT set SHAREPOINT_ENABLE_WRITES. The server must stay read-only.
+8. Ask me whether to enable list writes, and explain first: setting SHAREPOINT_ENABLE_WRITES=1 adds one tool, sp_list_item_update, which edits existing SharePoint list items (no create or delete) as my `az` account, and clients ask before each call. Default to no. Only if I say yes, add "SHAREPOINT_ENABLE_WRITES": "1" to the env of each config entry (for Claude Code, re-run the add command with `-e SHAREPOINT_ENABLE_WRITES=1` before `--`). Never set it without my yes.
 9. Verify: `claude mcp list` shows sharepoint-mcp as connected. Tell me to restart Claude Desktop if you edited its config.
 10. Summarise what you installed, where the config entries are, and anything I still need to do.
 ````
@@ -129,7 +129,7 @@ Install and configure the sharepoint-mcp MCP server (https://github.com/msetsma/
    - Claude Code: `claude mcp add --scope user sharepoint-mcp -- <uv.exe> run --directory <home>\sharepoint-mcp server.py`
    - Claude Desktop: add an entry under "mcpServers" in its config, with "command": "<uv.exe>" and "args": ["run", "--directory", "<home>\\sharepoint-mcp", "server.py"]. The config is %APPDATA%\Claude\claude_desktop_config.json, or for the Microsoft Store version under %LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\. Merge into the existing file; don't overwrite other servers. Back up the file first. Escape backslashes in JSON.
    Use real absolute paths.
-8. Do NOT set SHAREPOINT_ENABLE_WRITES. The server must stay read-only.
+8. Ask me whether to enable list writes, and explain first: setting SHAREPOINT_ENABLE_WRITES=1 adds one tool, sp_list_item_update, which edits existing SharePoint list items (no create or delete) as my `az` account, and clients ask before each call. Default to no. Only if I say yes, add "SHAREPOINT_ENABLE_WRITES": "1" to the env of each config entry (for Claude Code, re-run the add command with `-e SHAREPOINT_ENABLE_WRITES=1` before `--`). Never set it without my yes.
 9. Verify: `claude mcp list` shows sharepoint-mcp as connected. Tell me to fully quit Claude Desktop from the tray and reopen it if you edited its config.
 10. Summarise what you installed, where the config entries are, and anything I still need to do.
 ````
