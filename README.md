@@ -77,6 +77,30 @@ Register it with an MCP client as a stdio server:
 
 Use an absolute path to `uv` in GUI apps (find it with `which uv`); they don't inherit your shell `PATH`.
 
+## macOS
+
+### Install with an AI agent
+
+Paste this into Claude Code (or another coding agent) on the Mac:
+
+````text
+Install and configure the sharepoint-mcp MCP server (https://github.com/msetsma/sharepoint-mcp) on this Mac. Do each step, check it worked, and stop to tell me if one fails.
+
+1. Install Homebrew packages if missing: `brew install uv azure-cli`. Check with `uv --version` and `az version`.
+2. Clone the repo to ~/sharepoint-mcp (skip if it exists; run `git pull` instead).
+3. Run `uv run --directory ~/sharepoint-mcp test_server.py`. All tests must pass.
+4. Check `az account show`. If I'm not signed in, tell me to run `az login` myself with my work account, and wait for me to confirm.
+5. Check for synced SharePoint libraries: `ls ~/Library/CloudStorage | grep OneDrive-SharedLibraries`. If there are none, tell me to open a SharePoint library in the browser and click Sync. The list tools still work without this, so continue.
+6. Find the absolute path of uv with `which uv`.
+7. Register the server with every client installed here, using that absolute uv path:
+   - Claude Code: `claude mcp add --scope user sharepoint-mcp -- <uv> run --directory <home>/sharepoint-mcp server.py`
+   - Claude Desktop: add an entry under "mcpServers" in ~/Library/Application Support/Claude/claude_desktop_config.json with "command": "<uv>", "args": ["run", "--directory", "<home>/sharepoint-mcp", "server.py"], and "env": {"PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"}. Merge into the existing file; don't overwrite other servers. Back up the file first.
+   Use real absolute paths, not ~.
+8. Do NOT set SHAREPOINT_ENABLE_WRITES. The server must stay read-only.
+9. Verify: `claude mcp list` shows sharepoint-mcp as connected. Tell me to restart Claude Desktop if you edited its config.
+10. Summarise what you installed, where the config entries are, and anything I still need to do.
+````
+
 ## Windows
 
 The server runs on Windows with the same tools. Three things differ from
@@ -88,7 +112,30 @@ macOS, and the code handles each one:
 | How a cloud-only file is spotted | `st_blocks == 0` | `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` or `FILE_ATTRIBUTE_OFFLINE` set |
 | How `az` is launched | the `az` script | the CLI's bundled `python.exe -IBm azure.cli`, bypassing `az.cmd` so `cmd.exe` never re-parses `&`, `%` or `"` in URLs and JSON bodies |
 
-Setup:
+### Install with an AI agent
+
+Paste this into Claude Code (or another coding agent) on the Windows PC:
+
+````text
+Install and configure the sharepoint-mcp MCP server (https://github.com/msetsma/sharepoint-mcp) on this Windows PC. Use PowerShell. Do each step, check it worked, and stop to tell me if one fails.
+
+1. Install if missing: `winget install astral-sh.uv` and `winget install Microsoft.AzureCLI`. Open a new shell so PATH updates, then check `uv --version` and `az version`. The Azure CLI must be the winget/MSI install, not pip.
+2. Clone the repo to $HOME\sharepoint-mcp (skip if it exists; run `git pull` instead). Install Git with `winget install Git.Git` if needed.
+3. Run `uv run --directory $HOME\sharepoint-mcp test_server.py`. All tests must pass.
+4. Check `az account show`. If I'm not signed in, tell me to run `az login` myself with my work account, and wait for me to confirm.
+5. Check for synced SharePoint libraries: `Get-ChildItem HKCU:\Software\SyncEngines\Providers\OneDrive | Get-ItemProperty | Select-Object MountPoint, UrlNamespace`. Entries whose UrlNamespace is not "-my.sharepoint.com" are SharePoint libraries. If there are none, tell me to open a SharePoint library in the browser and click Sync. The list tools still work without this, so continue.
+6. Find the absolute path of uv with `(Get-Command uv).Source`.
+7. Register the server with every client installed here, using that absolute uv.exe path:
+   - Claude Code: `claude mcp add --scope user sharepoint-mcp -- <uv.exe> run --directory <home>\sharepoint-mcp server.py`
+   - Claude Desktop: add an entry under "mcpServers" in its config, with "command": "<uv.exe>" and "args": ["run", "--directory", "<home>\\sharepoint-mcp", "server.py"]. The config is %APPDATA%\Claude\claude_desktop_config.json, or for the Microsoft Store version under %LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\. Merge into the existing file; don't overwrite other servers. Back up the file first. Escape backslashes in JSON.
+   Use real absolute paths.
+8. Do NOT set SHAREPOINT_ENABLE_WRITES. The server must stay read-only.
+9. Verify: `claude mcp list` shows sharepoint-mcp as connected. Tell me to fully quit Claude Desktop from the tray and reopen it if you edited its config.
+10. Summarise what you installed, where the config entries are, and anything I still need to do.
+````
+
+### Setup by hand
+
 
 1. Install OneDrive and sign in with the work account. In SharePoint, click
    **Sync** on each library you want the server to see.

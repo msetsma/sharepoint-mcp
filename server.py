@@ -31,7 +31,6 @@ from xml.etree.ElementTree import Element
 from defusedxml.ElementTree import ParseError, fromstring
 
 # mcp SDK 2.0 renamed FastMCP to MCPServer; the decorator API is unchanged.
-# Import path matches the existing house pattern in dev/kan-setup/bin/kan-mcp.py.
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
