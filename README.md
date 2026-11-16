@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/msetsma/sharepoint-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/msetsma/sharepoint-mcp/actions/workflows/ci.yml)
 
-Read-only-by-default MCP server for SharePoint on macOS: OneDrive-synced
+Read-only-by-default MCP server for SharePoint on macOS and Windows: OneDrive-synced
 SharePoint libraries read from disk, and SharePoint lists via Microsoft Graph.
 The file tools need no Microsoft Graph consent and no Full Disk Access; the list
 tools (`sp_lists`, `sp_list_items`) use the Azure CLI's delegated Graph token
@@ -53,7 +53,7 @@ Graph returns 403.
 
 ## Requirements
 
-- macOS, with at least one SharePoint library synced through OneDrive (file tools)
+- macOS or Windows, with at least one SharePoint library synced through OneDrive (file tools)
 - [uv](https://docs.astral.sh/uv/) (fetches Python 3.14 on first run)
 - A signed-in Azure CLI (`az login`) for the list tools
 
@@ -76,3 +76,34 @@ Register it with an MCP client as a stdio server:
 ```
 
 Use an absolute path to `uv` in GUI apps (find it with `which uv`); they don't inherit your shell `PATH`.
+
+## Windows
+
+The server runs on Windows with the same tools. Three things differ from
+macOS, and the code handles each one:
+
+| | macOS | Windows |
+|---|---|---|
+| Where synced libraries live | `~/Library/CloudStorage/OneDrive-SharedLibraries-<Org>` | `%USERPROFILE%\<Org>\<Site> - <Library>`, read from OneDrive's registry entries under `HKCU\Software\SyncEngines\Providers\OneDrive` (personal OneDrive is skipped) |
+| How a cloud-only file is spotted | `st_blocks == 0` | `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` or `FILE_ATTRIBUTE_OFFLINE` set |
+| How `az` is launched | the `az` script | the CLI's bundled `python.exe -IBm azure.cli`, bypassing `az.cmd` so `cmd.exe` never re-parses `&`, `%` or `"` in URLs and JSON bodies |
+
+Setup:
+
+1. Install OneDrive and sign in with the work account. In SharePoint, click
+   **Sync** on each library you want the server to see.
+2. `winget install astral-sh.uv` and `winget install Microsoft.AzureCLI`, then
+   `az login`. The Azure CLI must be the MSI/winget install, which ships its
+   own `python.exe`. A pip-installed `az` isn't supported.
+3. Clone the repo and run `uv run test_server.py`.
+4. Register the server with the full path to `uv.exe` (`where uv`). Claude
+   Desktop's config is `%APPDATA%\Claude\claude_desktop_config.json`:
+
+   ```json
+   "sharepoint-mcp": {
+     "command": "C:\\Users\\you\\.local\\bin\\uv.exe",
+     "args": ["run", "--directory", "C:\\Users\\you\\sharepoint-mcp", "server.py"]
+   }
+   ```
+
+   Windows GUI apps inherit the user `PATH`, so no `env.PATH` entry is needed.

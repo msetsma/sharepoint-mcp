@@ -1,4 +1,4 @@
-"""MCP server for SharePoint data on macOS.
+"""MCP server for SharePoint data on macOS and Windows.
 
 Two data sources:
 
@@ -64,7 +64,7 @@ WRITE_UPDATE = ToolAnnotations(read_only_hint=False, destructive_hint=True, idem
 # SharePoint (OneDrive-synced libraries on disk)
 # --------------------------------------------------------------------------
 
-SKIP_DIRS = {'.Trash', '.DS_Store'}
+SKIP_DIRS = {'.Trash', '.DS_Store', 'desktop.ini'}
 TEXT_SUFFIXES = {'.txt', '.md', '.csv', '.tsv', '.json', '.xml', '.yaml', '.yml', '.log', '.sql', '.py'}
 OFFICE_SUFFIXES = {'.xlsx', '.xlsm', '.docx', '.pptx'}
 
@@ -72,16 +72,60 @@ OFFICE_SUFFIXES = {'.xlsx', '.xlsm', '.docx', '.pptx'}
 # their true size for free, so an oversized file costs nothing to reject.
 MAX_READ_BYTES = 50 * 1024 * 1024
 
+# Windows file attributes on a OneDrive Files-On-Demand placeholder.
+WIN_RECALL_ON_DATA_ACCESS = 0x400000
+WIN_OFFLINE = 0x1000
+
+
+SYNC_LOCATION = (
+    r'%USERPROFILE%\<Org> (from the OneDrive sync registry)'
+    if sys.platform == 'win32'
+    else '~/Library/CloudStorage/OneDrive-SharedLibraries-*'
+)
+
 
 def sync_roots() -> list[Path]:
-    """Synced SharePoint library roots.
-
-    Globbed, never hardcoded: macOS names the current root
-    "OneDrive-SharedLibraries-<Org> 2" (it appends " 2" after a name
-    collision), and both the org name and that suffix can change.
-    """
+    """Synced SharePoint library roots: one folder per org, holding its libraries."""
+    if sys.platform == 'win32':
+        return _windows_sync_roots()
+    # Globbed, never hardcoded: macOS names the current root
+    # "OneDrive-SharedLibraries-<Org> 2" (it appends " 2" after a name
+    # collision), and both the org name and that suffix can change.
     base = Path.home() / 'Library' / 'CloudStorage'
     return sorted(p for p in base.glob('OneDrive-SharedLibraries-*') if p.is_dir())
+
+
+def _windows_sync_roots() -> list[Path]:
+    """Org folders that hold synced SharePoint libraries on Windows.
+
+    Windows has no fixed folder name to glob. OneDrive records each synced
+    library under HKCU\\Software\\SyncEngines\\Providers\\OneDrive, with its
+    local folder in MountPoint (e.g. C:\\Users\\me\\Contoso\\Site - Documents)
+    and its web URL in UrlNamespace. The parent of a MountPoint is the org
+    folder, which matches the macOS root. Personal OneDrive (a -my.sharepoint.com
+    URL) is skipped, because its parent is the user's home folder.
+    """
+    import winreg
+
+    roots: set[Path] = set()
+    try:
+        base = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\SyncEngines\Providers\OneDrive')
+    except OSError:
+        return []
+    with base:
+        for i in range(winreg.QueryInfoKey(base)[0]):
+            try:
+                with winreg.OpenKey(base, winreg.EnumKey(base, i)) as key:
+                    mount = winreg.QueryValueEx(key, 'MountPoint')[0]
+                    url = winreg.QueryValueEx(key, 'UrlNamespace')[0]
+            except OSError:
+                continue
+            if '-my.sharepoint.com' in url.lower():
+                continue
+            parent = Path(mount).parent
+            if parent != Path.home() and parent.is_dir():
+                roots.add(parent)
+    return sorted(roots)
 
 
 def _resolve_in_roots(raw_path: str) -> Path:
@@ -93,8 +137,7 @@ def _resolve_in_roots(raw_path: str) -> Path:
     roots = sync_roots()
     if not roots:
         raise ValueError(
-            f'No synced SharePoint library found under {Path.home()}/Library/CloudStorage '
-            '(looked for OneDrive-SharedLibraries-*). Sync a library in SharePoint first.'
+            f'No synced SharePoint library found (looked for {SYNC_LOCATION}). Sync a library in SharePoint first.'
         )
     target = Path(raw_path).expanduser()
     if not target.is_absolute():
@@ -117,9 +160,16 @@ def _is_hydrated(st: os.stat_result) -> bool:
 
     A genuinely empty file also occupies zero blocks, so size 0 counts as
     local; otherwise every 0-byte file would be reported as needing a download.
+
+    Windows has no st_blocks. There a cloud-only placeholder carries
+    FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS or FILE_ATTRIBUTE_OFFLINE, which
+    stat reads without downloading.
     """
     if st.st_size == 0:
         return True
+    attrs = getattr(st, 'st_file_attributes', None)
+    if attrs is not None:
+        return not attrs & (WIN_RECALL_ON_DATA_ACCESS | WIN_OFFLINE)
     return getattr(st, 'st_blocks', 0) > 0
 
 
@@ -197,7 +247,7 @@ def sp_find(pattern: str, subdir: str | None = None, limit: int = 100, include_d
     """
     roots = sync_roots()
     if not roots:
-        return {'error': 'No synced SharePoint libraries found under ~/Library/CloudStorage.'}
+        return {'error': f'No synced SharePoint libraries found (looked for {SYNC_LOCATION}).'}
 
     if subdir:
         try:
@@ -481,16 +531,26 @@ class GraphError(RuntimeError):
     pass
 
 
-def _az_bin() -> str:
-    """Absolute path to the Azure CLI, so a GUI-launched agent finds it.
+def _az_bin() -> list[str]:
+    """Command prefix that runs the Azure CLI, so a GUI-launched agent finds it.
 
     macOS GUI apps do not inherit the shell PATH, hence the explicit resolve
     rather than a bare 'az'.
+
+    On Windows `az` is az.cmd, a batch file, and cmd.exe would re-parse every
+    argument: `&` in a Graph URL or `%`/`"` in a JSON body would be mangled or
+    run as a command. az.cmd only runs its bundled Python on `-m azure.cli`,
+    so call that directly and skip cmd.exe.
     """
     path = shutil.which('az')
     if not path:
         raise GraphError('Azure CLI (`az`) not found on PATH. Install it and run `az login`.')
-    return path
+    if path.lower().endswith('.cmd'):
+        python = Path(path).parent.parent / 'python.exe'
+        if python.is_file():
+            return [str(python), '-IBm', 'azure.cli']
+        raise GraphError(f'Found {path} but not its bundled python.exe; reinstall the Azure CLI.')
+    return [path]
 
 
 def _graph_request(
@@ -506,7 +566,7 @@ def _graph_request(
     being re-implemented here. A 2xx with an empty body (e.g. DELETE's 204)
     returns {}.
     """
-    cmd = [_az_bin(), 'rest', '--method', method, '--url', url, '--only-show-errors']
+    cmd = [*_az_bin(), 'rest', '--method', method, '--url', url, '--only-show-errors']
     hdrs = dict(headers or {})
     if body is not None:
         hdrs.setdefault('Content-Type', 'application/json')
@@ -696,7 +756,7 @@ if __name__ == '__main__':
     # stdio transport: stdout is the protocol channel, so diagnostics go to stderr.
     if not sync_roots():
         print(
-            'warning: no OneDrive-SharedLibraries-* root found; SharePoint tools '
+            f'warning: no synced SharePoint library found ({SYNC_LOCATION}); file tools '
             'will return errors until a library is synced.',
             file=sys.stderr,
         )

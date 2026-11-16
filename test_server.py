@@ -309,9 +309,7 @@ def test_list_items_filter_prefix_and_header():
     orig = s._graph_get
     s._graph_get = fake
     try:
-        s.sp_list_items(
-            'contoso.sharepoint.com,aaa,bbb', 'Projects', filter_query="status eq 'In Progress'"
-        )
+        s.sp_list_items('contoso.sharepoint.com,aaa,bbb', 'Projects', filter_query="status eq 'In Progress'")
     finally:
         s._graph_get = orig
     assert 'Projects' in seen['url'], seen['url']
@@ -389,6 +387,99 @@ def test_write_error_surfaces_as_dict():
         assert s.sp_list_item_update('contoso.sharepoint.com,a,b', 'L', '3', {'T': 1}) == {'error': 'nope'}
     finally:
         s._graph_request = orig
+
+
+def test_hydrated_windows_attributes():
+    """Windows has no st_blocks; placeholder status comes from file attributes."""
+
+    class Placeholder:
+        st_size = 5000
+        st_file_attributes = s.WIN_RECALL_ON_DATA_ACCESS | 0x20
+
+    class Offline:
+        st_size = 5000
+        st_file_attributes = s.WIN_OFFLINE
+
+    class Local:
+        st_size = 5000
+        st_file_attributes = 0x20  # FILE_ATTRIBUTE_ARCHIVE only
+
+    assert s._is_hydrated(Placeholder()) is False
+    assert s._is_hydrated(Offline()) is False
+    assert s._is_hydrated(Local()) is True
+
+
+def test_az_cmd_runs_bundled_python():
+    """On Windows, az.cmd is bypassed so cmd.exe never re-parses arguments."""
+    with tempfile.TemporaryDirectory() as d:
+        cli = Path(d) / 'CLI2'
+        (cli / 'wbin').mkdir(parents=True)
+        (cli / 'python.exe').write_text('')
+        az_cmd = cli / 'wbin' / 'az.cmd'
+        orig = s.shutil.which
+        s.shutil.which = lambda _name: str(az_cmd)
+        try:
+            assert s._az_bin() == [str(cli / 'python.exe'), '-IBm', 'azure.cli']
+            (cli / 'python.exe').unlink()
+            try:
+                s._az_bin()
+            except s.GraphError:
+                pass
+            else:
+                raise AssertionError('expected GraphError without bundled python.exe')
+        finally:
+            s.shutil.which = orig
+
+
+def test_windows_sync_roots_from_registry():
+    """Org folders come from OneDrive's registry entries; personal OneDrive is skipped."""
+    import sys
+    import types
+
+    with tempfile.TemporaryDirectory() as d:
+        org = Path(d) / 'Contoso'
+        (org / 'Team - Documents').mkdir(parents=True)
+        entries = {
+            'a': {
+                'MountPoint': str(org / 'Team - Documents'),
+                'UrlNamespace': 'https://contoso.sharepoint.com/sites/team/',
+            },
+            'b': {
+                'MountPoint': str(Path(d) / 'OneDrive - Contoso'),
+                'UrlNamespace': 'https://contoso-my.sharepoint.com/personal/me/',
+            },
+            'c': {},  # an entry without values is ignored
+        }
+
+        class Key:
+            def __init__(self, name=None):
+                self.name = name
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        fake = types.SimpleNamespace(
+            HKEY_CURRENT_USER=object(),
+            OpenKey=lambda parent, sub: Key(sub if isinstance(parent, Key) else None),
+            QueryInfoKey=lambda _key: (len(entries), 0, 0),
+            EnumKey=lambda _key, i: list(entries)[i],
+        )
+
+        def query(key, value):
+            try:
+                return (entries[key.name][value], 1)
+            except KeyError:
+                raise OSError(value) from None
+
+        fake.QueryValueEx = query
+        sys.modules['winreg'] = fake
+        try:
+            assert s._windows_sync_roots() == [org]
+        finally:
+            del sys.modules['winreg']
 
 
 def _run(t) -> bool:
