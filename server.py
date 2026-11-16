@@ -77,32 +77,42 @@ WIN_OFFLINE = 0x1000
 
 
 SYNC_LOCATION = (
-    r'%USERPROFILE%\<Org> (from the OneDrive sync registry)'
+    r'%USERPROFILE%\<Org> and %USERPROFILE%\OneDrive - <Org> (from the OneDrive sync registry)'
     if sys.platform == 'win32'
-    else '~/Library/CloudStorage/OneDrive-SharedLibraries-*'
+    else '~/Library/CloudStorage/OneDrive-*'
 )
 
 
 def sync_roots() -> list[Path]:
-    """Synced SharePoint library roots: one folder per org, holding its libraries."""
+    """Folders that hold SharePoint content synced by OneDrive.
+
+    Two kinds of root, because SharePoint reaches disk two ways:
+      * a synced-library folder, for libraries added with Sync. macOS names it
+        "OneDrive-SharedLibraries-<Org>" or "OneDrive-<Org>-<Site>"
+        (both seen in the wild);
+      * the work OneDrive itself, which holds libraries added with
+        "Add shortcut to My files" (as ordinary-looking folders) plus the
+        user's own OneDrive files, which also live in SharePoint.
+    Consumer OneDrive (OneDrive-Personal) is not SharePoint and is skipped.
+    """
     if sys.platform == 'win32':
         return _windows_sync_roots()
-    # Globbed, never hardcoded: macOS names the current root
-    # "OneDrive-SharedLibraries-<Org> 2" (it appends " 2" after a name
-    # collision), and both the org name and that suffix can change.
+    # Globbed, never hardcoded: the org name, the site name and a " 2" suffix
+    # (added after a name collision) all vary, so take every OneDrive-* folder.
     base = Path.home() / 'Library' / 'CloudStorage'
-    return sorted(p for p in base.glob('OneDrive-SharedLibraries-*') if p.is_dir())
+    return sorted(p for p in base.glob('OneDrive-*') if p.is_dir() and not p.name.startswith('OneDrive-Personal'))
 
 
 def _windows_sync_roots() -> list[Path]:
-    """Org folders that hold synced SharePoint libraries on Windows.
+    """SharePoint roots on Windows, matching the two macOS kinds.
 
     Windows has no fixed folder name to glob. OneDrive records each synced
     library under HKCU\\Software\\SyncEngines\\Providers\\OneDrive, with its
     local folder in MountPoint (e.g. C:\\Users\\me\\Contoso\\Site - Documents)
-    and its web URL in UrlNamespace. The parent of a MountPoint is the org
-    folder, which matches the macOS root. Personal OneDrive (a -my.sharepoint.com
-    URL) is skipped, because its parent is the user's home folder.
+    and its web URL in UrlNamespace. For a synced library the root is the
+    MountPoint's parent, the org folder. The work OneDrive (a -my.sharepoint.com
+    URL) is its own root: its parent is the home folder, and shortcut-added
+    libraries live inside it. Consumer OneDrive (d.docs.live.net) is skipped.
     """
     import winreg
 
@@ -119,11 +129,12 @@ def _windows_sync_roots() -> list[Path]:
                     url = winreg.QueryValueEx(key, 'UrlNamespace')[0]
             except OSError:
                 continue
-            if '-my.sharepoint.com' in url.lower():
-                continue
-            parent = Path(mount).parent
-            if parent != Path.home() and parent.is_dir():
-                roots.add(parent)
+            url = url.lower()
+            if '.sharepoint.com' not in url:
+                continue  # consumer OneDrive, not SharePoint
+            root = Path(mount) if '-my.sharepoint.com' in url else Path(mount).parent
+            if root != Path.home() and root.is_dir():
+                roots.add(root)
     return sorted(roots)
 
 

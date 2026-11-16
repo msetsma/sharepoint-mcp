@@ -53,7 +53,7 @@ Graph returns 403.
 
 ## Requirements
 
-- macOS or Windows, with at least one SharePoint library synced through OneDrive (file tools)
+- macOS or Windows, with OneDrive signed in to a work account (file tools). Libraries added with **Sync** or with **Add shortcut to My files** both work
 - [uv](https://docs.astral.sh/uv/) (fetches Python 3.14 on first run)
 - A signed-in Azure CLI (`az login`) for the list tools
 
@@ -90,7 +90,7 @@ Install and configure the sharepoint-mcp MCP server (https://github.com/msetsma/
 2. Clone the repo to ~/sharepoint-mcp (skip if it exists; run `git pull` instead).
 3. Run `uv run --directory ~/sharepoint-mcp test_server.py`. All tests must pass.
 4. Check `az account show`. If I'm not signed in, tell me to run `az login` myself with my work account, and wait for me to confirm.
-5. Check for synced SharePoint libraries: `ls ~/Library/CloudStorage | grep OneDrive-SharedLibraries`. If there are none, tell me to open a SharePoint library in the browser and click Sync. The list tools still work without this, so continue.
+5. Check that OneDrive is set up: `ls ~/Library/CloudStorage | grep '^OneDrive-'` should list at least one folder other than OneDrive-Personal. The server reads all of them, so libraries added with Sync and ones added with "Add shortcut to My files" both work. If there are none, tell me to sign in to OneDrive with my work account. The list tools still work without this, so continue.
 6. Find the absolute path of uv with `which uv`.
 7. Register the server with every client installed here, using that absolute uv path:
    - Claude Code: `claude mcp add --scope user sharepoint-mcp -- <uv> run --directory <home>/sharepoint-mcp server.py`
@@ -108,7 +108,7 @@ macOS, and the code handles each one:
 
 | | macOS | Windows |
 |---|---|---|
-| Where synced libraries live | `~/Library/CloudStorage/OneDrive-SharedLibraries-<Org>` | `%USERPROFILE%\<Org>\<Site> - <Library>`, read from OneDrive's registry entries under `HKCU\Software\SyncEngines\Providers\OneDrive` (personal OneDrive is skipped) |
+| Where SharePoint files live | every `~/Library/CloudStorage/OneDrive-*` folder except `OneDrive-Personal`: synced libraries (`OneDrive-SharedLibraries-<Org>` or `OneDrive-<Org>-<Site>`) and the work OneDrive (`OneDrive-<Org>`, which holds shortcut-added libraries) | read from OneDrive's registry entries under `HKCU\Software\SyncEngines\Providers\OneDrive`: `%USERPROFILE%\<Org>` for synced libraries and `%USERPROFILE%\OneDrive - <Org>` for the work OneDrive. Consumer OneDrive is skipped |
 | How a cloud-only file is spotted | `st_blocks == 0` | `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` or `FILE_ATTRIBUTE_OFFLINE` set |
 | How `az` is launched | the `az` script | the CLI's bundled `python.exe -IBm azure.cli`, bypassing `az.cmd` so `cmd.exe` never re-parses `&`, `%` or `"` in URLs and JSON bodies |
 
@@ -123,7 +123,7 @@ Install and configure the sharepoint-mcp MCP server (https://github.com/msetsma/
 2. Clone the repo to $HOME\sharepoint-mcp (skip if it exists; run `git pull` instead). Install Git with `winget install Git.Git` if needed.
 3. Run `uv run --directory $HOME\sharepoint-mcp test_server.py`. All tests must pass.
 4. Check `az account show`. If I'm not signed in, tell me to run `az login` myself with my work account, and wait for me to confirm.
-5. Check for synced SharePoint libraries: `Get-ChildItem HKCU:\Software\SyncEngines\Providers\OneDrive | Get-ItemProperty | Select-Object MountPoint, UrlNamespace`. Entries whose UrlNamespace is not "-my.sharepoint.com" are SharePoint libraries. If there are none, tell me to open a SharePoint library in the browser and click Sync. The list tools still work without this, so continue.
+5. Check that OneDrive is set up: `Get-ChildItem HKCU:\Software\SyncEngines\Providers\OneDrive | Get-ItemProperty | Select-Object MountPoint, UrlNamespace`. The server reads every entry whose UrlNamespace contains ".sharepoint.com", so libraries added with Sync and ones added with "Add shortcut to My files" both work. If there are none, tell me to sign in to OneDrive with my work account. The list tools still work without this, so continue.
 6. Find the absolute path of uv with `(Get-Command uv).Source`.
 7. Register the server with every client installed here, using that absolute uv.exe path:
    - Claude Code: `claude mcp add --scope user sharepoint-mcp -- <uv.exe> run --directory <home>\sharepoint-mcp server.py`
@@ -137,8 +137,9 @@ Install and configure the sharepoint-mcp MCP server (https://github.com/msetsma/
 ### Setup by hand
 
 
-1. Install OneDrive and sign in with the work account. In SharePoint, click
-   **Sync** on each library you want the server to see.
+1. Install OneDrive and sign in with the work account. In SharePoint, add
+   each library you want the server to see with **Sync** or **Add shortcut to
+   My files**.
 2. `winget install astral-sh.uv` and `winget install Microsoft.AzureCLI`, then
    `az login`. The Azure CLI must be the MSI/winget install, which ships its
    own `python.exe`. A pip-installed `az` isn't supported.

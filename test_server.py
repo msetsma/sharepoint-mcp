@@ -432,23 +432,24 @@ def test_az_cmd_runs_bundled_python():
 
 
 def test_windows_sync_roots_from_registry():
-    """Org folders come from OneDrive's registry entries; personal OneDrive is skipped."""
+    """Roots come from OneDrive's registry: org folders plus the work OneDrive, never consumer OneDrive."""
     import sys
     import types
 
     with tempfile.TemporaryDirectory() as d:
         org = Path(d) / 'Contoso'
         (org / 'Team - Documents').mkdir(parents=True)
+        personal = Path(d) / 'OneDrive - Contoso'
+        (personal / 'Shortcut Library').mkdir(parents=True)
+        (Path(d) / 'OneDrive').mkdir()
         entries = {
             'a': {
                 'MountPoint': str(org / 'Team - Documents'),
                 'UrlNamespace': 'https://contoso.sharepoint.com/sites/team/',
             },
-            'b': {
-                'MountPoint': str(Path(d) / 'OneDrive - Contoso'),
-                'UrlNamespace': 'https://contoso-my.sharepoint.com/personal/me/',
-            },
+            'b': {'MountPoint': str(personal), 'UrlNamespace': 'https://contoso-my.sharepoint.com/personal/me/'},
             'c': {},  # an entry without values is ignored
+            'd': {'MountPoint': str(Path(d) / 'OneDrive'), 'UrlNamespace': 'https://d.docs.live.net/abc123/'},
         }
 
         class Key:
@@ -477,9 +478,26 @@ def test_windows_sync_roots_from_registry():
         fake.QueryValueEx = query
         sys.modules['winreg'] = fake
         try:
-            assert s._windows_sync_roots() == [org]
+            assert s._windows_sync_roots() == sorted([org, personal])
         finally:
             del sys.modules['winreg']
+
+
+def test_mac_sync_roots_include_work_onedrive():
+    """Shortcut-added libraries live in the work OneDrive, so it is a root too."""
+    if s.sys.platform == 'win32':
+        return
+    with tempfile.TemporaryDirectory() as d:
+        cloud = Path(d) / 'Library' / 'CloudStorage'
+        for name in ('OneDrive-SharedLibraries-Contoso', 'OneDrive-Contoso', 'OneDrive-Personal', 'GoogleDrive-me'):
+            (cloud / name).mkdir(parents=True)
+        orig = s.Path.home
+        s.Path.home = classmethod(lambda _cls: Path(d))
+        try:
+            names = [p.name for p in s.sync_roots()]
+        finally:
+            s.Path.home = orig
+        assert names == ['OneDrive-Contoso', 'OneDrive-SharedLibraries-Contoso'], names
 
 
 def _run(t) -> bool:
