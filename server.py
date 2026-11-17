@@ -40,8 +40,10 @@ mcp = MCPServer(
     version='0.1.0',
     instructions=(
         'Read-only access to SharePoint: OneDrive-synced SharePoint files and '
-        'SharePoint lists (sp_lists/sp_list_items, via Graph -- needs a '
-        'signed-in `az` CLI). sp_list_item_update edits existing list items and '
+        'SharePoint sites and lists via Graph (needs a signed-in `az` CLI). Start '
+        'with sp_my_sites to find a site id instead of asking for a URL; call '
+        'sp_list_schema before filtering or updating a list, because field keys '
+        'are internal column names. sp_list_item_update edits existing list items and '
         'exists only when SHAREPOINT_ENABLE_WRITES is set; show the user the exact '
         'item and field changes and get their approval before every call. There is '
         'no create or delete tool by design. '
@@ -706,6 +708,211 @@ def sp_list_items(
     if truncated:
         out['truncated'] = True
         out['note'] = f'More than {limit} rows exist; raise `limit` to see the rest.'
+    return out
+
+
+def _graph_batch(paths: list[str]) -> list[dict[str, Any]]:
+    """GET many Graph paths in 20-request $batch calls; one result per path, in order.
+
+    Each result is {'status': int, 'body': dict}. One `az` launch costs about
+    a second, so batching keeps a 30-team user from waiting 30 seconds.
+    """
+    out: list[dict[str, Any]] = []
+    for start in range(0, len(paths), 20):
+        chunk = paths[start : start + 20]
+        body = {'requests': [{'id': str(i), 'method': 'GET', 'url': p} for i, p in enumerate(chunk)]}
+        resp = {r['id']: r for r in _graph_request(f'{GRAPH_ROOT}/$batch', 'POST', body).get('responses', [])}
+        out += [
+            {'status': resp.get(str(i), {}).get('status', 0), 'body': resp.get(str(i), {}).get('body') or {}}
+            for i in range(len(chunk))
+        ]
+    return out
+
+
+@mcp.tool(annotations=READ_ONLY)
+def sp_my_sites(query: str | None = None) -> dict[str, Any]:
+    """List the SharePoint sites behind my Teams and Microsoft 365 groups.
+
+    Use this to find a site id for `sp_lists`, `sp_list_items`, `sp_list_schema`
+    and `sp_recent_changes` without asking the user for a URL. Sites that
+    belong to no group (classic sites, communication sites) are not listed;
+    pass their URL to the other tools directly.
+
+    Requires a signed-in Azure CLI (`az login`).
+
+    Args:
+        query: Case-insensitive substring to match against the site or group name.
+    """
+    url = (
+        f'{GRAPH_ROOT}/me/memberOf/microsoft.graph.group'
+        "?$filter=groupTypes/any(c:c+eq+'Unified')&$count=true&$select=id,displayName&$top=999"
+    )
+    groups: list[dict[str, Any]] = []
+    try:
+        while url:
+            data = _graph_get(url, headers={'ConsistencyLevel': 'eventual'})
+            groups += data.get('value', [])
+            url = data.get('@odata.nextLink')
+        if query:
+            q = query.lower()
+            groups = [g for g in groups if q in (g.get('displayName') or '').lower()]
+        results = _graph_batch([f'/groups/{g["id"]}/sites/root?$select=id,displayName,webUrl' for g in groups])
+    except GraphError as e:
+        return {'error': str(e)}
+
+    sites, missing = [], []
+    for g, r in zip(groups, results, strict=True):
+        if r['status'] == 200:
+            b = r['body']
+            sites.append(
+                {
+                    'name': b.get('displayName') or g.get('displayName'),
+                    'site_id': b.get('id'),
+                    'web_url': b.get('webUrl'),
+                }
+            )
+        else:
+            missing.append(g.get('displayName'))
+    sites.sort(key=lambda x: (x['name'] or '').lower())
+    out: dict[str, Any] = {'count': len(sites), 'sites': sites}
+    if missing:
+        out['without_site'] = sorted(n for n in missing if n)
+    return out
+
+
+def _column_type(col: dict[str, Any]) -> str:
+    """Graph marks a column's type by which facet key it carries."""
+    for key in (
+        'text', 'choice', 'number', 'currency', 'dateTime', 'boolean', 'lookup', 'personOrGroup',
+        'hyperlinkOrPicture', 'calculated', 'term', 'geolocation', 'thumbnail', 'contentApprovalStatus',
+    ):  # fmt: skip
+        if key in col:
+            return key
+    return 'other'  # built-in columns such as ID or FileLeafRef carry no type facet
+
+
+@mcp.tool(annotations=READ_ONLY)
+def sp_list_schema(site: str, list_name: str, include_hidden: bool = False) -> dict[str, Any]:
+    """Describe a list's columns: internal names, types, allowed choices, and flags.
+
+    Call this before `sp_list_items` filters or `sp_list_item_update`: field
+    keys are the internal `name`, not the display name, and a choice column
+    only accepts one of its `choices`. Filtering on a column with
+    `indexed: false` is slow on big lists. Do not try to update `read_only`
+    columns.
+
+    Requires a signed-in Azure CLI (`az login`).
+
+    Args:
+        site: Site URL or Graph site id.
+        list_name: List display name or id.
+        include_hidden: Also return hidden system columns.
+    """
+    try:
+        sid = _resolve_site_id(site)
+        data = _graph_get(f'{GRAPH_ROOT}/sites/{sid}/lists/{urllib.parse.quote(list_name)}/columns')
+    except GraphError as e:
+        return {'error': str(e)}
+    columns = []
+    for col in data.get('value', []):
+        if col.get('hidden') and not include_hidden:
+            continue
+        kind = _column_type(col)
+        entry: dict[str, Any] = {
+            'name': col.get('name'),
+            'display_name': col.get('displayName'),
+            'type': kind,
+            'required': bool(col.get('required')),
+            'read_only': bool(col.get('readOnly')),
+            'indexed': bool(col.get('indexed')),
+        }
+        if kind == 'choice':
+            entry['choices'] = col['choice'].get('choices', [])
+            entry['multiple'] = col['choice'].get('displayAs') == 'checkBoxes'
+        elif kind in ('lookup', 'personOrGroup'):
+            entry['multiple'] = bool(col[kind].get('allowMultipleSelection'))
+        if col.get('description'):
+            entry['description'] = col['description']
+        columns.append(entry)
+    return {'count': len(columns), 'columns': columns}
+
+
+def _parse_since(since: str | None) -> str | None:
+    """Graph datetime for `since` (default 7 days ago), or None if malformed.
+
+    Validated strictly because it is spliced into an OData filter.
+    """
+    if since is None:
+        return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - 7 * 86400))
+    s = since.strip()
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?Z?)?', s):
+        return None
+    return s if 'T' in s else s + 'T00:00:00Z'
+
+
+@mcp.tool(annotations=READ_ONLY)
+def sp_recent_changes(
+    site: str, list_name: str | None = None, since: str | None = None, limit: int = 100
+) -> dict[str, Any]:
+    """What changed in a document library or list recently, newest first.
+
+    Works on libraries that are not synced to this computer. Deleted items are
+    not reported.
+
+    Requires a signed-in Azure CLI (`az login`).
+
+    Args:
+        site: Site URL or Graph site id.
+        list_name: Library or list display name or id; omit for the site's
+            default document library.
+        since: ISO date or datetime (e.g. "2026-11-10"); default 7 days ago.
+        limit: Maximum items to return.
+    """
+    since_dt = _parse_since(since)
+    if since_dt is None:
+        return {'error': f'since must be an ISO date like 2026-11-10, got {since!r}'}
+    try:
+        sid = _resolve_site_id(site)
+        lid = list_name and urllib.parse.quote(list_name)
+        if not lid:
+            lid = _graph_get(f'{GRAPH_ROOT}/sites/{sid}/drive/list?$select=id')['id']
+        params = [
+            '$select=id,webUrl,lastModifiedBy',
+            '$expand=fields($select=Title,FileLeafRef,FileRef,Modified,ContentType)',
+            '$orderby=fields/Modified%20desc',
+            f"$filter=fields/Modified%20ge%20'{since_dt}'",
+            f'$top={min(max(limit, 1), 200)}',
+        ]
+        url = f'{GRAPH_ROOT}/sites/{sid}/lists/{lid}/items?{"&".join(params)}'
+        items: list[dict[str, Any]] = []
+        truncated = False
+        while url:
+            data = _graph_get(url, headers={'Prefer': 'HonorNonIndexedQueriesWarningMayFailRandomly'})
+            for it in data.get('value', []):
+                if len(items) >= limit:
+                    truncated = True
+                    break
+                f = it.get('fields', {})
+                items.append(
+                    {
+                        'id': it.get('id'),
+                        'name': f.get('FileLeafRef') or f.get('Title'),
+                        'path': f.get('FileRef'),
+                        'modified': f.get('Modified'),
+                        'modified_by': ((it.get('lastModifiedBy') or {}).get('user') or {}).get('displayName'),
+                        'is_folder': f.get('ContentType') == 'Folder',
+                        'web_url': it.get('webUrl'),
+                    }
+                )
+            if truncated:
+                break
+            url = data.get('@odata.nextLink')
+    except GraphError as e:
+        return {'error': str(e)}
+    out: dict[str, Any] = {'since': since_dt, 'count': len(items), 'items': items}
+    if truncated:
+        out['truncated'] = True
+        out['note'] = f'More than {limit} items changed; raise `limit` or move `since` later.'
     return out
 
 

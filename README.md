@@ -18,9 +18,15 @@ instead, so they require a signed-in `az`. List edits exist too, but are
 | `sp_read` | Text of one file; downloads it if needed |
 | `sp_lists` | Lists and libraries on a SharePoint site (Graph) |
 | `sp_list_items` | Rows with column values from a list (Graph) |
+| `sp_my_sites` | Sites behind my Teams and Microsoft 365 groups, with their ids (Graph) |
+| `sp_list_schema` | A list's columns: internal names, types, allowed choices, read-only and indexed flags (Graph) |
+| `sp_recent_changes` | Files or rows changed since a date, newest first, with who changed them; works on unsynced libraries (Graph) |
 
-`sp_lists` and `sp_list_items` borrow the `az` CLI's delegated Graph token, so
-run `az login` once before using them (no app registration needed).
+The Graph tools borrow the `az` CLI's delegated Graph token, so run `az login`
+once before using them (no app registration needed). That token reaches sites
+through group membership, so `sp_my_sites` only lists group-connected sites;
+pass any other site's URL to the tools directly. Tenants can restrict what the
+Azure CLI may read, in which case a tool returns Graph's 403 as an error.
 
 ## Writes (opt-in, update only)
 

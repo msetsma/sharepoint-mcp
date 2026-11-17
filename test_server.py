@@ -500,6 +500,120 @@ def test_mac_sync_roots_include_work_onedrive():
         assert names == ['OneDrive-Contoso', 'OneDrive-SharedLibraries-Contoso'], names
 
 
+def test_my_sites_batches_and_reports_groups_without_site():
+    """Groups are read once, sites come back in one $batch, 404s are listed."""
+    calls = []
+
+    def fake(url, method='GET', body=None, headers=None, timeout=60):
+        calls.append((method, url))
+        if 'memberOf' in url:
+            assert headers == {'ConsistencyLevel': 'eventual'}
+            return {'value': [{'id': 'g1', 'displayName': 'Beta Team'}, {'id': 'g2', 'displayName': 'Alpha'}]}
+        assert url.endswith('/$batch')
+        assert method == 'POST'
+        site = {'id': 'h,1,2', 'displayName': 'Beta Team', 'webUrl': 'https://x/b'}
+        return {
+            'responses': [
+                {'id': r['id'], 'status': 200, 'body': site}
+                if r['url'].startswith('/groups/g1/')
+                else {'id': r['id'], 'status': 404, 'body': {'error': {}}}
+                for r in reversed(body['requests'])  # Graph may answer out of order
+            ]
+        }
+
+    orig = s._graph_request
+    s._graph_request = fake
+    try:
+        r = s.sp_my_sites()
+        assert r['sites'] == [{'name': 'Beta Team', 'site_id': 'h,1,2', 'web_url': 'https://x/b'}], r
+        assert r['without_site'] == ['Alpha']
+        assert len(calls) == 2
+        assert s.sp_my_sites(query='alp')['sites'] == []  # only Alpha matches, and it has no site
+    finally:
+        s._graph_request = orig
+
+
+def test_list_schema_types_choices_and_hidden():
+    cols = [
+        {
+            'name': 'Status',
+            'displayName': 'Status',
+            'choice': {'choices': ['New', 'Done'], 'displayAs': 'dropDownMenu'},
+        },
+        {'name': 'Owner', 'displayName': 'Owner', 'personOrGroup': {'allowMultipleSelection': True}, 'indexed': True},
+        {'name': 'ID', 'displayName': 'ID', 'readOnly': True},
+        {'name': '_Hidden', 'hidden': True, 'text': {}},
+    ]
+    orig = s._graph_get
+    s._graph_get = lambda url, headers=None, timeout=60: {'value': cols}
+    try:
+        r = s.sp_list_schema('h,1,2', 'Projects')
+        by = {c['name']: c for c in r['columns']}
+        assert set(by) == {'Status', 'Owner', 'ID'}
+        assert by['Status']['type'] == 'choice'
+        assert by['Status']['choices'] == ['New', 'Done']
+        assert by['Owner']['type'] == 'personOrGroup'
+        assert by['Owner']['multiple']
+        assert by['Owner']['indexed']
+        assert by['ID']['type'] == 'other'
+        assert by['ID']['read_only']
+        assert s.sp_list_schema('h,1,2', 'Projects', include_hidden=True)['count'] == 4
+    finally:
+        s._graph_get = orig
+
+
+def test_recent_changes_query_and_mapping():
+    seen = []
+
+    def fake(url, headers=None, timeout=60):
+        seen.append(url)
+        if url.endswith('/drive/list?$select=id'):
+            return {'id': 'L1'}
+        return {
+            'value': [
+                {
+                    'id': '7',
+                    'webUrl': 'https://x/f.docx',
+                    'lastModifiedBy': {'user': {'displayName': 'Ann'}},
+                    'fields': {
+                        'FileLeafRef': 'f.docx',
+                        'FileRef': '/sites/x/f.docx',
+                        'Modified': '2026-11-12T10:00:00Z',
+                        'ContentType': 'Document',
+                    },
+                },
+                {'id': '8', 'fields': {'Title': 'Row', 'Modified': '2026-11-11T10:00:00Z', 'ContentType': 'Folder'}},
+            ],
+            '@odata.nextLink': 'https://graph/next',
+        }
+
+    orig = s._graph_get
+    s._graph_get = fake
+    try:
+        r = s.sp_recent_changes('h,1,2', since='2026-11-10', limit=2)
+        assert '/lists/L1/items?' in seen[1]
+        assert "fields/Modified%20ge%20'2026-11-10T00:00:00Z'" in seen[1]
+        assert '$orderby=fields/Modified%20desc' in seen[1]
+        assert r['items'][0] == {
+            'id': '7', 'name': 'f.docx', 'path': '/sites/x/f.docx', 'modified': '2026-11-12T10:00:00Z',
+            'modified_by': 'Ann', 'is_folder': False, 'web_url': 'https://x/f.docx',
+        }  # fmt: skip
+        assert r['items'][1]['name'] == 'Row'
+        assert r['items'][1]['is_folder']
+        assert len(seen) == 3
+        assert r['truncated']
+        r = s.sp_recent_changes('h,1,2', since='2026-11-10', limit=1)
+        assert r['truncated']
+        assert r['count'] == 1
+    finally:
+        s._graph_get = orig
+
+
+def test_recent_changes_rejects_odata_injection():
+    for bad in ("2026-11-10' or 1 eq 1", 'last week', '2026-11-10T10:00:00+02:00'):
+        assert 'error' in s.sp_recent_changes('h,1,2', since=bad), bad
+
+
 def _run(t) -> bool:
     """Run one test, print its outcome, and return whether it passed."""
     try:
